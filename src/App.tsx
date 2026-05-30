@@ -23,7 +23,7 @@ import {
   Bookmark,
   CheckCircle
 } from "lucide-react";
-import { WEEKLY_CURRICULUM_DATA, getDailyLessonPlan } from "./data";
+import { WEEKLY_CURRICULUM_DATA, getDailyLessonPlan, getUnitNameForWeek } from "./data";
 import { WeeklyCurriculum, DayLessonPlan } from "./types";
 
 // Open DB and save/retrieve values for permanent storage (IndexedDB)
@@ -78,6 +78,21 @@ function getFromIndexedDB(key: string): Promise<any> {
   });
 }
 
+function getGregorianDateString(dateStr: string): string {
+  try {
+    const d = new Date(dateStr);
+    if (isNaN(d.getTime())) return dateStr;
+    return d.toLocaleDateString("ar-YE", {
+      weekday: "long",
+      year: "numeric",
+      month: "long",
+      day: "numeric"
+    });
+  } catch (e) {
+    return dateStr;
+  }
+}
+
 export default function App() {
   // Navigation & Grade States
   const [activeTab, setActiveTab] = useState<"master-plan" | "daily-planner" | "analytics">("master-plan");
@@ -97,6 +112,16 @@ export default function App() {
   const [generatedPlan, setGeneratedPlan] = useState<string>("");
   const [isGenerating, setIsGenerating] = useState<boolean>(false);
   const [apiError, setApiError] = useState<{ code: string; message: string } | null>(null);
+
+  // Date selection & format modes (Table columns vs raw text)
+  const [plannerDate, setPlannerDate] = useState<string>(() => {
+    const saved = localStorage.getItem("menhaj_planner_date");
+    if (saved) return saved;
+    const today = new Date();
+    return today.toISOString().slice(0, 10);
+  });
+  const [previewFormatMode, setPreviewFormatMode] = useState<"table" | "text">("table");
+  const [currentPlanObject, setCurrentPlanObject] = useState<DayLessonPlan | null>(null);
 
   // Offline/Online Readiness & Environment Variables (Alpha Customizer)
   const [generationMode, setGenerationMode] = useState<"offline" | "online">("offline");
@@ -154,6 +179,13 @@ export default function App() {
           setTeacherNotes(dbNotes);
           localStorage.setItem("menhaj_teacher_notes", JSON.stringify(dbNotes));
         }
+
+        // 4. Fetch planner date from IndexedDB
+        const dbDate = await getFromIndexedDB("planner_date");
+        if (dbDate) {
+          setPlannerDate(dbDate);
+          localStorage.setItem("menhaj_planner_date", dbDate);
+        }
       } catch (err) {
         console.warn("Failed to initiate permanent database backup:", err);
       }
@@ -171,6 +203,25 @@ export default function App() {
     localStorage.setItem("menhaj_teacher_notes", JSON.stringify(teacherNotes));
     saveToIndexedDB("teacher_notes", teacherNotes);
   }, [teacherNotes]);
+
+  useEffect(() => {
+    localStorage.setItem("menhaj_planner_date", plannerDate);
+    saveToIndexedDB("planner_date", plannerDate);
+  }, [plannerDate]);
+
+  // Background synchronize structured lesson plan object in the background whenever options change
+  useEffect(() => {
+    const updatedPlan = getDailyLessonPlan(
+      plannerGrade,
+      plannerWeek,
+      plannerTitle || "موضوع الدرس اليومي المعتمد",
+      plannerType,
+      studentReadiness,
+      classroomEnvironment,
+      selectedStrategy
+    );
+    setCurrentPlanObject(updatedPlan);
+  }, [plannerGrade, plannerWeek, plannerTitle, plannerType, studentReadiness, classroomEnvironment, selectedStrategy]);
 
   // Request storage persistence from the browser
   const handleEnableDurableStorage = async () => {
@@ -304,6 +355,7 @@ export default function App() {
             classroomEnvironment,
             selectedStrategy
           );
+          setCurrentPlanObject(offlinePlan);
           generateFallbackMarkdown(offlinePlan);
         } catch (err: any) {
           setApiError({
@@ -344,6 +396,16 @@ export default function App() {
 
       if (resData.success) {
         setGeneratedPlan(resData.text);
+        const standardPlan = getDailyLessonPlan(
+          plannerGrade,
+          plannerWeek,
+          plannerTitle,
+          plannerType,
+          studentReadiness,
+          classroomEnvironment,
+          selectedStrategy
+        );
+        setCurrentPlanObject(standardPlan);
       } else {
         throw new Error("استجابة غير صالحة من معالج الذكاء الاصطناعي.");
       }
@@ -364,6 +426,7 @@ export default function App() {
         classroomEnvironment,
         selectedStrategy
       );
+      setCurrentPlanObject(staticPlan);
       generateFallbackMarkdown(staticPlan);
     } finally {
       setIsGenerating(false);
@@ -375,7 +438,7 @@ export default function App() {
     const md = `
 # 📝 خطة التحضير اليومية النموذجية (تحضير محلي سريع مميز)
 **المبحث:** لغتي العربية | **الصف:** ${plan.grade === 7 ? 'السابع' : plan.grade === 8 ? 'الثامن' : 'التاسع'} الأساسي
-**الأسبوع الدراسي:** الأسبوع ${plan.week} | **عنوان الدرس:** ${plan.title}
+**الوحدة الدراسية:** ${getUnitNameForWeek(plan.week)} (الأسبوع ${plan.week}) | **عنوان الدرس:** ${plan.title}
 
 ---
 
@@ -398,7 +461,7 @@ ${plan.multimediaTools.map(t => `* ${t}`).join("\n")}
 | الخطوة الزمنية | المكون التعليمي النشط | دليلك لتفعيل مهارات جيل ألفا |
 | :--- | :--- | :--- |
 | **التمهيد وإيقاظ الشغف (5 د)** | ${plan.steps.warmup} | استخدام عصف ذهني سريع ذكي يشد انتباه التلاميذ. |
-| **الالستكشاف وتقديم المحتوى (20 د)** | ${plan.steps.exploration} | توضيح مهارات وقواعد كتاب لغتي العربية بالتدرج الصفي الشامل واستهداف الأهداف. |
+| **الاستكشاف وتقديم المحتوى (20 د)** | ${plan.steps.exploration} | توضيح مهارات وقواعد كتاب لغتي العربية بالتدرج الصفي الشامل واستهداف الأهداف. |
 | **التطبيق الموجه وحل الأنشطة (10 د)** | ${plan.steps.practice} | تدريب المجموعات أو الأقران بشكل يعزز فاعلية الصف. |
 | **التقييم الخارجي والذاتي (5 د)** | ${plan.steps.assessment} | سؤال التقويم لضمان الإنجاز التحصيلي التراكمي. |
 
@@ -439,22 +502,126 @@ ${plan.questions.map(q => `  1. ${q}`).join("\n")}
 
   // Download lesson plan as MS Word file
   const handleDownloadWord = () => {
-    const filename = `تحضير_درس_الأسبوع_${plannerWeek}_الصف_${plannerGrade}.doc`;
-    const formatHtml = `
-      <html xmlns:o='urn:schemas-microsoft-com:office:office' xmlns:w='urn:schemas-microsoft-com:office:word' xmlns='http://www.w3.org/TR/REC-html40'>
-      <head>
-        <title>خطة درس لغتي العربية</title>
-        <style>
-          body { font-family: 'Cairo', 'Arial', sans-serif; direction: rtl; text-align: right; }
-          h1 { color: #047857; text-align: center; }
-          h2 { color: #065f46; border-bottom: 2px solid #047857; padding-bottom: 5px; }
-          table { width: 100%; border-collapse: collapse; margin: 15px 0; }
-          th, td { border: 1px solid #ccc; padding: 10px; text-align: right; }
-          th { background-color: #f3f4f6; }
-        </style>
-      </head>
-      <body>
-        <div style="direction: rtl; text-align: right;">
+    const filename = `تحضير_درس_لغتي_العربية_الأسبوع_${plannerWeek}_الصف_${plannerGrade}.doc`;
+    const dateFormatted = getGregorianDateString(plannerDate);
+    
+    let contentHtml = "";
+    if (currentPlanObject) {
+      const plan = currentPlanObject;
+      contentHtml = `
+        <div style="direction: rtl; text-align: right; font-family: 'Cairo', 'Arial', sans-serif;">
+          <table style="width:100%; border:none; margin-bottom: 20px;">
+            <tr>
+              <td style="text-align:right; font-size:11px; width:33%; border:none;">
+                <b>الجمهورية اليمنية</b><br>
+                وزارة التربية والتعليم<br>
+                مكتب التربية والتعليم بمحافظة صنعاء<br>
+                مدرسة: .......................................
+              </td>
+              <td style="text-align:center; font-size:14px; width:34%; font-weight:bold; border:none;">
+                سجل التحضير والتخطيط التربوي المعتمد<br>
+                <span style="font-size:10px; color:#115e59;">وثيقة تحصيل للمرحلة الأساسية - محافظة صنعاء</span>
+              </td>
+              <td style="text-align:left; font-size:11px; width:33%; border:none;">
+                <b>المادة: لغتي العربية</b><br>
+                الصف الدراسي: ${plannerGrade === 7 ? "السابع" : plannerGrade === 8 ? "الثامن" : "التاسع"} الأساسي<br>
+                الخطة الموزعة: ${getUnitNameForWeek(plannerWeek)} (الأسبوع ${plannerWeek})<br>
+                التاريخ المعين: ${dateFormatted}
+              </td>
+            </tr>
+          </table>
+
+          <div style="border: 2px solid #065f46; padding: 15px; margin-bottom: 15px;">
+            <p style="font-size:14px; font-weight:bold; color:#065f46; margin:0 0 10px 0; border-bottom:1px solid #ccc; padding-bottom:5px;">📋 المعطيات والبيانات العامة للفصل الدراسي الأول في صنعاء</p>
+            <table style="width:100%; border-collapse:collapse; margin-bottom:15px; font-size:11px;">
+              <tr style="background-color:#f3f4f6; font-weight:bold;">
+                <th style="border:1px solid #000; padding:8px; text-align:center;">المرحلة والصف</th>
+                <th style="border:1px solid #000; padding:8px; text-align:center;">الجدولة الزمنية</th>
+                <th style="border:1px solid #000; padding:8px; text-align:center;">الفرع اللغوي</th>
+                <th style="border:1px solid #000; padding:8px; text-align:center;">موضوع المحاضرة الحصيلي</th>
+                <th style="border:1px solid #000; padding:8px; text-align:center;">مستوى المدرسة والطلاب</th>
+              </tr>
+              <tr>
+                <td style="border:1px solid #000; padding:8px; text-align:center;">الصف ${plannerGrade} الأساسي</td>
+                <td style="border:1px solid #000; padding:8px; text-align:center;">${getUnitNameForWeek(plannerWeek)} (الأسبوع ${plannerWeek})</td>
+                <td style="border:1px solid #000; padding:8px; text-align:center;">
+                  ${plannerType === 'reading' ? 'النصوص والقراءة' : plannerType === 'grammar' ? 'النحو والقواعد' : plannerType === 'spelling' ? 'الإملاء والتطبيق صفي' : 'مراجعة وتقويم'}
+                </td>
+                <td style="border:1px solid #000; padding:8px; text-align:center; font-weight:bold; color:#065f46;">${plannerTitle}</td>
+                <td style="border:1px solid #000; padding:8px; text-align:center;">${classroomEnvironment} (الاستعداد: ${studentReadiness})</td>
+              </tr>
+            </table>
+
+            <p style="font-size:14px; font-weight:bold; color:#065f46; margin:15px 0 10px 0; border-bottom:1px solid #ccc; padding-bottom:5px;">🎯 أولاً: الأهداف السلوكية الرشيدة (مستويات تصنيف بلوم)</p>
+            <ul>
+              <li style="margin-bottom:6px; font-size:11px;"><b>التذكر والفهم واستيعاب الحواصل المعرفية:</b> ${plan.bloomObjectives.rememberUnderstand}</li>
+              <li style="margin-bottom:6px; font-size:11px;"><b>التطبيق العملي والتمكين الصفي اللغوي:</b> ${plan.bloomObjectives.apply}</li>
+              <li style="margin-bottom:6px; font-size:11px;"><b>مهارات الفكر العليا والاستقصاء البناء:</b> ${plan.bloomObjectives.analyzeCreate}</li>
+            </ul>
+
+            <p style="font-size:14px; font-weight:bold; color:#065f46; margin:15px 0 10px 0; border-bottom:1px solid #ccc; padding-bottom:5px;">🚀 ثانياً: بيداغوجيا التدريس واستراتيجيات جيل الفا ومصادره الفعالة</p>
+            <ul>
+              <li style="margin-bottom:5px; font-size:11px;"><b>الاستراتيجيات النشطة المتبعة:</b> ${plan.alphaStrategies.join(" - ")}</li>
+              <li style="margin-bottom:5px; font-size:11px;"><b>الصناعات والوسائط المتعددة والموارد:</b> ${plan.multimediaTools.join(" - ")}</li>
+            </ul>
+
+            <p style="font-size:14px; font-weight:bold; color:#065f46; margin:15px 0 10px 0; border-bottom:1px solid #ccc; padding-bottom:5px;">📅 ثالثاً: خطة سير الحصة التعليمية والأنشطة المتدرجة بالتفصيل</p>
+            <table style="width:100%; border-collapse:collapse; margin-bottom:15px; font-size:11px;">
+              <tr style="background-color:#f3f4f6; font-weight:bold;">
+                <th style="border:1px solid #000; padding:8px; width:15%; text-align:center;">الزمن والخطوة</th>
+                <th style="border:1px solid #000; padding:8px; width:20%; text-align:right;">المكون البيداغوجي الأساسي</th>
+                <th style="border:1px solid #000; padding:8px; text-align:right;">إجراءات سير المعلم والأنشطة التبادلية</th>
+              </tr>
+              <tr>
+                <td style="border:1px solid #000; padding:8px; text-align:center; font-weight:bold;">5 دقائق</td>
+                <td style="border:1px solid #000; padding:8px; font-weight:bold;">التمهيد وإيقاظ الشغف صفيّاً</td>
+                <td style="border:1px solid #000; padding:8px;">${plan.steps.warmup}</td>
+              </tr>
+              <tr>
+                <td style="border:1px solid #000; padding:8px; text-align:center; font-weight:bold;">20 دقيقة</td>
+                <td style="border:1px solid #000; padding:8px; font-weight:bold;">الاستكشاف وتقديم المهارة</td>
+                <td style="border:1px solid #000; padding:8px;">${plan.steps.exploration}</td>
+              </tr>
+              <tr>
+                <td style="border:1px solid #000; padding:8px; text-align:center; font-weight:bold;">10 دقائق</td>
+                <td style="border:1px solid #000; padding:8px; font-weight:bold;">التدريب الصفي والتمكين الموجه</td>
+                <td style="border:1px solid #000; padding:8px;">${plan.steps.practice}</td>
+              </tr>
+              <tr>
+                <td style="border:1px solid #000; padding:8px; text-align:center; font-weight:bold;">5 دقائق</td>
+                <td style="border:1px solid #000; padding:8px; font-weight:bold;">التقويم التكويني وصنع الأثر</td>
+                <td style="border:1px solid #000; padding:8px;">${plan.steps.assessment}</td>
+              </tr>
+            </table>
+
+            <p style="font-size:14px; font-weight:bold; color:#065f46; margin:15px 0 10px 0; border-bottom:1px solid #ccc; padding-bottom:5px;">💬 رابعاً: أسئلة التقويم الختامي المبرمجة صفيّاً والتكاليف المنزلية</p>
+            <p style="font-size:11px; margin:0 0 5px 0;"><b>التكليف والواجب المدرسي المطلوب كتابياً:</b></p>
+            <div style="background-color:#fffbeb; border:1px solid #fcf7e1; padding:8px; font-size:11px; font-weight:bold; margin-bottom:10px;">${plan.homework}</div>
+            
+            <p style="font-size:11px; margin:10px 0 5px 0;"><b>العصف والتقويم الفردي والختامي:</b></p>
+            <ol>
+              ${plan.questions.map(q => `              <li style="margin-bottom:4px; font-size:11px;">${q}</li>`).join("\n")}
+            </ol>
+          </div>
+
+          <table style="width:100%; border:none; margin-top:30px; font-size:11px; text-align:center;">
+            <tr>
+              <td style="width:33%; border:none;">
+                <b>توقيع وملاحظات المعلم:</b><br><br>......................................
+              </td>
+              <td style="width:33%; border:none;">
+                <b>توقيع الموجه الفني الزائر:</b><br><br>......................................
+              </td>
+              <td style="width:33%; border:none;">
+                <b>مدير ومصادقة المدرسة:</b><br><br>ختم وإمضاء المدرسة رسميّاً
+              </td>
+            </tr>
+          </table>
+        </div>
+      `;
+    } else {
+      contentHtml = `
+        <div style="direction: rtl; text-align: right; font-family: 'Cairo', 'Arial', sans-serif;">
           ${generatedPlan
             .replace(/\n/g, "<br>")
             .replace(/# (.*)/g, "<h1>$1</h1>")
@@ -462,6 +629,24 @@ ${plan.questions.map(q => `  1. ${q}`).join("\n")}
             .replace(/\*\* (.*)\*\*/g, "<strong>$1</strong>")
             .replace(/\* (.*)/g, "<li>$1</li>")}
         </div>
+      `;
+    }
+
+    const formatHtml = `
+      <html xmlns:o='urn:schemas-microsoft-com:office:office' xmlns:w='urn:schemas-microsoft-com:office:word' xmlns='http://www.w3.org/TR/REC-html40'>
+      <head>
+        <title>خطة درس لغتي العربية المعتمدة</title>
+        <style>
+          body { font-family: 'Cairo', 'Arial', sans-serif; direction: rtl; text-align: right; }
+          h1 { color: #047857; text-align: center; font-size: 16px; margin: 10px 0; }
+          h2 { color: #065f46; border-bottom: 2px solid #047857; padding-bottom: 5px; font-size: 14px; margin-top: 15px; }
+          table { width: 100%; border-collapse: collapse; margin: 15px 0; }
+          th, td { border: 1px solid #777; padding: 8px; text-align: right; }
+          th { background-color: #f3f4f6; }
+        </style>
+      </head>
+      <body>
+        ${contentHtml}
       </body>
       </html>
     `;
@@ -472,6 +657,7 @@ ${plan.questions.map(q => `  1. ${q}`).join("\n")}
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
+    showBackupToast("تم البدء في تحميل مستند التحضير المنقح للتوجيه (DOC) بنجاح!", "success");
   };
 
   // Open Notes Editor
@@ -745,7 +931,7 @@ ${plan.questions.map(q => `  1. ${q}`).join("\n")}
                         <span className={`px-3 py-1 rounded-full text-xs font-bold ${
                           weekItem.isReviewWeek ? "bg-amber-500 text-white" : "bg-emerald-950 text-white"
                         }`}>
-                          الأسبوع {weekItem.week}
+                          {getUnitNameForWeek(weekItem.week)} (الأسبوع {weekItem.week})
                         </span>
                         <div>
                           <h3 className="text-base font-bold text-slate-900 flex items-center gap-2">
@@ -997,6 +1183,20 @@ ${plan.questions.map(q => `  1. ${q}`).join("\n")}
                     </select>
                   </div>
 
+                  {/* Targeted Lesson Date */}
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 mb-1 flex items-center gap-1.5">
+                      <Calendar className="h-3.5 w-3.5 text-slate-500" />
+                      تاريخ إلقاء الحصة (للطباعة والمستند):
+                    </label>
+                    <input 
+                      type="date"
+                      value={plannerDate}
+                      onChange={(e) => setPlannerDate(e.target.value)}
+                      className="w-full bg-slate-50 border border-slate-300 rounded-lg p-2 text-xs focus:ring-1 focus:ring-emerald-700 focus:outline-none font-bold text-slate-850 bg-slate-55"
+                    />
+                  </div>
+
                   {/* Week */}
                   <div>
                     <label className="block text-xs font-bold text-slate-700 mb-1">الأسبوع بالخطة الفصلية الموزعة:</label>
@@ -1006,7 +1206,7 @@ ${plan.questions.map(q => `  1. ${q}`).join("\n")}
                       className="w-full bg-slate-50 border border-slate-300 rounded-lg p-2 text-xs focus:ring-1 focus:ring-emerald-700 focus:outline-none font-semibold text-slate-800"
                     >
                       {WEEKLY_CURRICULUM_DATA.map(w => (
-                        <option key={w.week} value={w.week}>الأسبوع {w.week} - محور {w.theme.substring(0, 30)}...</option>
+                        <option key={w.week} value={w.week}>{getUnitNameForWeek(w.week)} (الأسبوع {w.week}) - {w.theme.substring(0, 30)}...</option>
                       ))}
                     </select>
                   </div>
@@ -1124,54 +1324,211 @@ ${plan.questions.map(q => `  1. ${q}`).join("\n")}
                   {/* Actual Lesson Plan Document view */}
                   <div className="p-6 md:p-8 flex-grow overflow-y-auto leading-relaxed rtl text-right prose prose-emerald prose-sm max-w-none">
                     <div className="border-4 border-double border-emerald-800 p-6 rounded-lg bg-amber-50/5 relative mb-4">
-                      {/* Logo and official branding at the top inside document */}
-                      <div className="flex items-center justify-between border-b pb-4 mb-6 border-slate-300">
-                        <div className="text-right text-xs">
-                          <p>الجمهورية اليمنية</p>
+                      {/* Logo and official branding at the top inside document (WITHOUT LOGOS) */}
+                      <div className="flex flex-col sm:flex-row items-start justify-between border-b pb-4 mb-6 border-slate-300 gap-4">
+                        <div className="text-right text-[11px] space-y-0.5 text-slate-800">
+                          <p className="font-bold">الجمهورية اليمنية</p>
+                          <p>وزارة التربية والتعليم</p>
                           <p>مكتب التربية والتعليم بمحافظة صنعاء</p>
-                          <p>مدرسة / التوجيه التربوي الإقليمي</p>
+                          <p>مدرسة: .......................................</p>
                         </div>
-                        <div className="text-center font-bold text-emerald-800 text-lg">
-                          شِعار المَنهج اليمني كهدف تحصيلي
+                        <div className="text-center font-extrabold text-slate-900 flex-grow px-2 py-1 max-w-md">
+                          <h2 className="text-sm sm:text-base tracking-wide font-extrabold text-emerald-900 m-0 border-b border-emerald-800 pb-1">سجل التحضير والتخطيط التربوي المعتمد</h2>
+                          <p className="text-[10px] text-teal-800 font-extrabold m-0 mt-1">وثيقة تحصيل للمرحلة الأساسية - محافظة صنعاء</p>
                         </div>
-                        <div className="text-left text-xs">
-                          <p>المادة: لغتي العربية</p>
-                          <p>التخطيط: خطة درس يومية نموذجية</p>
-                          <p>التاريخ: {new Date().toLocaleDateString("ar-YE", { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}</p>
+                        <div className="text-left text-[11px] space-y-0.5 text-slate-800 font-sans">
+                          <p className="font-semibold text-slate-900">المادة: لغتي العربية</p>
+                          <p>الصف الدراسي: {plannerGrade === 7 ? 'السابع' : plannerGrade === 8 ? 'الثامن' : 'التاسع'} الأساسي</p>
+                          <p>الخطة الموزعة: {getUnitNameForWeek(plannerWeek)} (الأسبوع {plannerWeek})</p>
+                          <p className="font-bold text-emerald-950">التاريخ: {getGregorianDateString(plannerDate)}م</p>
                         </div>
                       </div>
 
-                      {/* Content parsing from state */}
-                      <div className="space-y-4 text-slate-800">
-                        {/* We parse simple markdown headers visually */}
-                        {generatedPlan.split("\n").map((line, lid) => {
-                          if (line.startsWith("# ")) {
-                            return <h2 key={lid} className="text-xl font-bold text-center text-emerald-950 mt-4 mb-2">{line.replace("# ", "")}</h2>;
-                          } else if (line.startsWith("## ")) {
-                            return <h3 key={lid} className="text-base font-bold text-emerald-900 border-b border-emerald-800/20 pb-1 mt-6 mb-2">{line.replace("## ", "")}</h3>;
-                          } else if (line.startsWith("### ")) {
-                            return <h4 key={lid} className="text-sm font-bold text-amber-700 mt-4 mb-1">{line.replace("### ", "")}</h4>;
-                          } else if (line.startsWith("* ")) {
-                            return <p key={lid} className="text-xs list-item list-inside pr-2 text-slate-700 my-1">{line.replace("* ", "")}</p>;
-                          } else if (line.trim() === "---") {
-                            return <hr key={lid} className="border-slate-300 my-4" />;
-                          } else if (line.startsWith("|") && generatedPlan.includes("الخطوة الزمنية")) {
-                            // Render simple clean layout table if table markdown
-                            if (line.includes("الخطوة") || line.includes("---")) return null;
-                            const cells = line.split("|").filter(c => c.trim() !== "");
-                            if (cells.length < 2) return null;
-                            return (
-                              <div key={lid} className="bg-slate-50 p-2.5 rounded border border-slate-200 my-1 flex gap-4 text-xs">
-                                <span className="font-bold text-emerald-900 whitespace-nowrap shrink-0">{cells[0]?.trim()}</span>
-                                <span className="font-medium text-slate-700">{cells[1]?.trim() || ""} - {cells[2]?.trim() || ""}</span>
-                              </div>
-                            );
-                          } else if (line.trim() !== "") {
-                            return <p key={lid} className="text-xs my-2 text-slate-700">{line}</p>;
-                          }
-                          return null;
-                        })}
-                      </div>
+                      {/* Alternate Render based on selected Toggle */}
+                      {previewFormatMode === "table" ? (
+                        <div className="space-y-4">
+                          {/* Table Panel 1: General lesson settings */}
+                          <div className="overflow-x-auto">
+                            <table className="w-full border-2 border-slate-900 text-xs border-collapse">
+                              <tbody>
+                                <tr className="bg-slate-100 font-extrabold border-b-2 border-slate-900 text-slate-900 font-sans">
+                                  <td className="p-2 border-l border-slate-900 text-center w-[15%]">الصف الحاصل</td>
+                                  <td className="p-2 border-l border-slate-900 text-center w-[15%]">الخطة الدراسية</td>
+                                  <td className="p-2 border-l border-slate-900 text-center w-[20%]">فرع المادة</td>
+                                  <td className="p-2 border-l border-slate-900 text-center w-[30%] font-bold text-slate-900">موضوع الدرس المستهدف</td>
+                                  <td className="p-2 text-center w-[20%]">البيئة ومستوى التلاميذ</td>
+                                </tr>
+                                <tr className="text-slate-800 align-middle">
+                                  <td className="p-2 border-l border-slate-900 text-center font-bold">الصف {plannerGrade === 7 ? 'السابع' : plannerGrade === 8 ? 'الثامن' : 'التاسع'} الأساسي</td>
+                                  <td className="p-2 border-l border-slate-900 text-center font-semibold text-slate-700">{getUnitNameForWeek(plannerWeek)} (الأسبوع {plannerWeek})</td>
+                                  <td className="p-2 border-l border-slate-900 text-center font-bold text-emerald-950">
+                                    {plannerType === 'reading' ? '📖 درس النصوص والقراءة' : plannerType === 'grammar' ? '⚖️ النحو والقواعد اللغوية' : plannerType === 'spelling' ? '✍️ الإملاء والتطبيق الصفي' : '⏳ مراجعة وتقويم الحصيلة'}
+                                  </td>
+                                  <td className="p-2 border-l border-slate-900 text-center font-extrabold text-xs text-emerald-900 bg-emerald-50/10">{plannerTitle || "لا يوجد" }</td>
+                                  <td className="p-2 text-center text-[10px] leading-relaxed">
+                                    <span className="block font-bold">{classroomEnvironment}</span>
+                                    <span className="block text-slate-500 font-semibold mt-0.5">درجة مواءمة التلاميذ: {studentReadiness}</span>
+                                  </td>
+                                </tr>
+                              </tbody>
+                            </table>
+                          </div>
+
+                          {/* Table Panel 2: Educational Blueprint */}
+                          <div className="overflow-x-auto">
+                            <table className="w-full border-2 border-slate-900 text-xs border-collapse">
+                              <thead>
+                                <tr className="bg-slate-100 font-extrabold border-b-2 border-slate-900 text-right text-slate-900">
+                                  <th className="p-2 border-l border-slate-900 w-[35%] text-emerald-950 font-extrabold text-xs">🎯 الأهداف السلوكية الإجرائية (بلوم المعرفي)</th>
+                                  <th className="p-2 border-l border-slate-900 w-[35%] text-emerald-950 font-extrabold text-xs">🚀 استراتيجيات جيل ألفا ومصادر تدريس المعلم</th>
+                                  <th className="p-2 w-[30%] text-emerald-950 font-extrabold text-xs">📝 قياس التعلم والتكليف والواجب المنزلي</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                <tr className="align-top text-slate-800 leading-relaxed font-sans">
+                                  {/* Objectives */}
+                                  <td className="p-2.5 border-l border-slate-900 space-y-2 text-right">
+                                    <div>
+                                      <span className="font-extrabold text-emerald-900 block border-b border-slate-200 pb-0.5 mb-1 text-[10px]">• التذكر والفهم:</span>
+                                      <p className="text-slate-705 font-medium text-xs font-sans leading-relaxed">{currentPlanObject?.bloomObjectives.rememberUnderstand}</p>
+                                    </div>
+                                    <div className="pt-1.5">
+                                      <span className="font-extrabold text-emerald-900 block border-b border-slate-200 pb-0.5 mb-1 text-[10px]">• التطبيق والضبط:</span>
+                                      <p className="text-slate-705 font-medium text-xs font-sans leading-relaxed">{currentPlanObject?.bloomObjectives.apply}</p>
+                                    </div>
+                                    <div className="pt-1.5">
+                                      <span className="font-extrabold text-emerald-900 block border-b border-slate-200 pb-0.5 mb-1 text-[10px]">• مهارات التفكير العليا والتحليل:</span>
+                                      <p className="text-slate-705 font-medium text-xs font-sans leading-relaxed">{currentPlanObject?.bloomObjectives.analyzeCreate}</p>
+                                    </div>
+                                  </td>
+                                  
+                                  {/* Strategies and Tools */}
+                                  <td className="p-2.5 border-l border-slate-900 space-y-2.5">
+                                    <div>
+                                      <span className="font-extrabold text-emerald-900 block border-b border-slate-200 pb-0.5 mb-1.5 text-[10px]">• الأساليب المفعلة والخطط البيداغوجية:</span>
+                                      <ul className="list-disc pr-4 space-y-1 block text-slate-700 leading-relaxed font-semibold text-emerald-950 text-xs">
+                                        {currentPlanObject?.alphaStrategies.map((s, idx) => (
+                                          <li key={idx}>{s}</li>
+                                        ))}
+                                      </ul>
+                                    </div>
+                                    <div className="pt-1.5 border-t border-slate-100">
+                                      <span className="font-extrabold text-emerald-900 block border-b border-slate-200 pb-0.5 mb-1.5 text-[10px]">• الوسائل والمعينات ونماذج المحاضرة:</span>
+                                      <ul className="list-disc pr-4 space-y-1 block text-slate-705 leading-relaxed text-[11px]">
+                                        {currentPlanObject?.multimediaTools.map((t, idx) => (
+                                          <li key={idx} className="font-medium">{t}</li>
+                                        ))}
+                                      </ul>
+                                    </div>
+                                  </td>
+                                  
+                                  {/* Homework & validation metrics */}
+                                  <td className="p-2.5 space-y-2.5">
+                                    <div>
+                                      <span className="font-extrabold text-emerald-900 block border-b border-slate-200 pb-0.5 mb-1.5 text-[10px]">• التكليف والواجب المنزلي المطلوب كتابياً:</span>
+                                      <p className="text-slate-750 font-bold bg-amber-50/50 p-2 rounded border border-amber-200 text-xs leading-relaxed">{currentPlanObject?.homework}</p>
+                                    </div>
+                                    <div className="pt-1 border-t border-slate-100">
+                                      <span className="font-extrabold text-emerald-900 block border-b border-slate-200 pb-0.5 mb-1 text-[10px]">• التثبت والأثر التعليمي:</span>
+                                      <p className="text-[10px] text-slate-500 font-semibold leading-relaxed mt-1">
+                                        يتابع الموجه الفني حلول التلاميذ وتصويباتهم لضمان الأمانة التحصيلية وسير التوزيع المعتمد لمدارس محافظة صنعاء لعام 1447 هـ.
+                                      </p>
+                                    </div>
+                                  </td>
+                                </tr>
+                              </tbody>
+                            </table>
+                          </div>
+
+                          {/* Table Panel 3: Execution steps in classroom (Timeline) */}
+                          <div className="overflow-x-auto">
+                            <table className="w-full border-2 border-slate-900 text-xs border-collapse">
+                              <thead>
+                                <tr className="bg-slate-100 font-extrabold border-b-2 border-slate-900 text-right text-slate-900">
+                                  <th className="p-2 border-l border-slate-900 w-[15%] text-emerald-950 font-extrabold text-xs text-center">⏲️ خط سير الحصة</th>
+                                  <th className="p-2 border-l border-slate-900 w-[25%] text-emerald-950 font-extrabold text-xs">مكوّن الدرس والتحضير</th>
+                                  <th className="p-2 text-emerald-950 font-extrabold text-xs">إجراءات سير الحصة وسلوك تدريس معلم المادة للتنفيذ</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                <tr className="border-b border-slate-900 align-top text-slate-800 font-sans">
+                                  <td className="p-2 border-l border-slate-900 text-center font-extrabold text-slate-950">5 دقائق</td>
+                                  <td className="p-2 border-l border-slate-900 font-bold text-emerald-900 text-xs bg-slate-50/10">1. التمهيد وإيقاد الرغبة صفيّاً</td>
+                                  <td className="p-2 text-slate-700 text-xs font-sans font-medium leading-relaxed">{currentPlanObject?.steps.warmup}</td>
+                                </tr>
+                                <tr className="border-b border-slate-900 align-top text-slate-800 font-sans">
+                                  <td className="p-2 border-l border-slate-900 text-center font-extrabold text-slate-950">20 دقيقة</td>
+                                  <td className="p-2 border-l border-slate-900 font-bold text-emerald-900 text-xs bg-slate-50/10">2. الاستكشاف والعرض والضبط المنهجي</td>
+                                  <td className="p-2 text-slate-700 text-xs font-sans font-medium leading-relaxed">{currentPlanObject?.steps.exploration}</td>
+                                </tr>
+                                <tr className="border-b border-slate-900 align-top text-slate-800 font-sans">
+                                  <td className="p-2 border-l border-slate-900 text-center font-extrabold text-slate-950">10 دقائق</td>
+                                  <td className="p-2 border-l border-slate-900 font-bold text-emerald-900 text-xs bg-slate-50/10">3. التدريب الموجه وإبراز التطبيق</td>
+                                  <td className="p-2 text-slate-700 text-xs font-sans font-medium leading-relaxed">{currentPlanObject?.steps.practice}</td>
+                                </tr>
+                                <tr className="align-top text-slate-800 font-sans">
+                                  <td className="p-2 border-l border-slate-900 text-center font-extrabold text-slate-950">5 دقائق</td>
+                                  <td className="p-2 border-l border-slate-900 font-bold text-emerald-900 text-xs bg-slate-50/10">4. قياس الأثر والتقويم التكويني</td>
+                                  <td className="p-2 text-slate-700 text-xs font-sans font-medium leading-relaxed">{currentPlanObject?.steps.assessment}</td>
+                                </tr>
+                              </tbody>
+                            </table>
+                          </div>
+
+                          {/* Table Panel 4: Assessment and Metric Questions */}
+                          <div className="overflow-x-auto">
+                            <table className="w-full border-2 border-slate-900 text-xs border-collapse">
+                              <thead>
+                                <tr className="bg-slate-100 font-extrabold border-b border-slate-900 text-right text-slate-900">
+                                  <th className="p-2 text-emerald-950 font-extrabold text-xs">💬 أسئلة التقويم الختامي والتكويني والتحصيل الفوري (مدونة صفيّاً)</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                <tr>
+                                  <td className="p-3 space-y-2">
+                                    {currentPlanObject?.questions.map((q, idx) => (
+                                      <div key={idx} className="flex items-start gap-2.5 text-slate-800 font-sans font-medium">
+                                        <span className="font-extrabold text-emerald-950 text-xs bg-emerald-100 px-2 py-0.5 rounded leading-none shrink-0 border border-slate-350">{idx + 1}</span>
+                                        <p className="font-bold text-xs leading-relaxed">{q}</p>
+                                      </div>
+                                    ))}
+                                  </td>
+                                </tr>
+                              </tbody>
+                            </table>
+                          </div>
+                        </div>
+                      ) : (
+                        /* Text block view */
+                        <div className="space-y-4 text-slate-800 font-sans">
+                          {generatedPlan.split("\n").map((line, lid) => {
+                            if (line.startsWith("# ")) {
+                              return <h2 key={lid} className="text-xl font-bold text-center text-emerald-950 mt-4 mb-2">{line.replace("# ", "")}</h2>;
+                            } else if (line.startsWith("## ")) {
+                              return <h3 key={lid} className="text-base font-bold text-emerald-900 border-b border-emerald-800/20 pb-1 mt-6 mb-2">{line.replace("## ", "")}</h3>;
+                            } else if (line.startsWith("### ")) {
+                              return <h4 key={lid} className="text-sm font-bold text-amber-700 mt-4 mb-1">{line.replace("### ", "")}</h4>;
+                            } else if (line.startsWith("* ")) {
+                              return <p key={lid} className="text-xs list-item list-inside pr-2 text-slate-700 my-1">{line.replace("* ", "")}</p>;
+                            } else if (line.trim() === "---") {
+                              return <hr key={lid} className="border-slate-300 my-4" />;
+                            } else if (line.startsWith("|") && generatedPlan.includes("الخطوة الزمنية")) {
+                              if (line.includes("الخطوة") || line.includes("---")) return null;
+                              const cells = line.split("|").filter(c => c.trim() !== "");
+                              if (cells.length < 2) return null;
+                              return (
+                                <div key={lid} className="bg-slate-50 p-2.5 rounded border border-slate-200 my-1 flex gap-4 text-xs font-sans">
+                                  <span className="font-bold text-emerald-900 whitespace-nowrap shrink-0">{cells[0]?.trim()}</span>
+                                  <span className="font-medium text-slate-700">{cells[1]?.trim() || ""} - {cells[2]?.trim() || ""}</span>
+                                </div>
+                              );
+                            } else if (line.trim() !== "") {
+                              return <p key={lid} className="text-xs my-1 text-slate-700 leading-relaxed font-semibold">{line}</p>;
+                            }
+                            return null;
+                          })}
+                        </div>
+                      )}
 
                       {/* Official Signature block for the principal / directory supervisor */}
                       <div className="mt-8 pt-6 border-t border-slate-300 grid grid-cols-3 gap-4 text-center text-xs">
